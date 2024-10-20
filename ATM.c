@@ -2,6 +2,7 @@
 #include <string.h>
 #include <time.h>
 #include <conio.h>
+#include <stddef.h>
 
 // Define bool for compatibility in Turbo C
 typedef int bool;
@@ -12,6 +13,7 @@ struct Account {
   int id;
   char cardNo[13];
   char pin[5];
+  char transferNo[5];
   char name[21];
   float balance;
 };
@@ -19,6 +21,7 @@ struct Account {
 struct Transaction {
   int id;
   int accountId;
+  int transferAccountId;
   float amount;
   char createdAt[20];
 };
@@ -37,13 +40,15 @@ void logout();
 // system functionality
 void deposit();
 void withdrawal();
+void transfer();
 void viewTransaction();
 void account();
 
 // DB operations
-void addTransaction(float amount);
+void addTransaction(float amount, int accountId, int transferAccountId);
 float getAmount();
 int getLastTransactionId();
+void getAccountNameById(int accountId, char *accountName, size_t size);
 
 // system date-time
 void getCurrentDateTime(char *dateTimeStr);
@@ -64,16 +69,19 @@ void main() {
     getch();
 }
 
+/* ------------------------------ SCREEN FUNCTIONS -------------------------*/
+
 void home() {
     
     // show home option list
     printf("\n\n");
     printf("1. Deposit Amount\n");
     printf("2. Withdrawal Amount\n");
-    printf("3. View Transaction\n");
-    printf("4. Account\n");
-    printf("5. Logout\n");
-    printf("6. Exit\n");
+    printf("3. Transfer Money\n");
+    printf("4. View Transaction\n");
+    printf("5. Account\n");
+    printf("6. Logout\n");
+    printf("7. Exit\n");
     printf("\n\n\n");
 
     printf("Enter your choice: ");
@@ -89,18 +97,22 @@ void home() {
             withdrawal();
             break;
         case '3':
+            screen("TRANSFER MONEY", true);
+            transfer();
+            break;
+        case '4':
             screen("VIEW TRANSACTION", true);
             viewTransaction();
             break;
-        case '4':
+        case '5':
             screen("ACCOUNT", true);
             account();
             break;
-        case '5':
+        case '6':
             screen("LOGOUT", true);
             logout();
             break;
-        case '6':
+        case '7':
             exit(0); // Exit the program
             break;
         default:
@@ -125,10 +137,13 @@ void deposit() {
         currentAccount->balance += amount;
 
         // add deposit transaction
-        addTransaction(amount);
+        addTransaction(amount, currentAccount->id, false);
         printf("\n\nAmount deposited successfully!!\n\n\n");
 
         delay(500);
+        printf("\n\nPress any key to go back: ");
+        getch();
+
         screen("HOME", false);
         home();
     } else {
@@ -166,10 +181,13 @@ void withdrawal() {
             currentAccount->balance -= amount;
 
             // add withdrawal transaction
-            addTransaction(-amount);
+            addTransaction(-amount, currentAccount->id, false);
             printf("\n\nAmount withdrawn successfully!!\n");
 
             delay(500);
+            printf("\n\nPress any key to go back: ");
+            getch();
+
             screen("HOME", false);
             home();
         } else {
@@ -194,9 +212,97 @@ void withdrawal() {
     }
 }
 
+void transfer(){
+    FILE *accountDB;
+    struct Account targetAccount;
+    char cardNo[12];
+    char transferNo[4];
+    float amount;
+    bool isValidAccount = false;
+
+    // load account.csv file with reading mode
+    accountDB = fopen("account.csv", "r");
+    if (accountDB == NULL) {
+        printf("Error opening database files!\n");
+        return;
+    }
+
+    // input target account card number and transferNo
+    printf("\n\nEnter the target account card number: ");
+    scanf("%s", cardNo);
+    printf("Enter the transfer number: ");
+    scanf("%s", transferNo);
+
+    if(strcmp(currentAccount->cardNo, cardNo) != 0){
+        // read each account record and compare cardNo and transferNo
+        fseek(accountDB, 0, SEEK_SET);
+        while (fscanf(accountDB, "%d,%[^,],%[^,],%[^,],%[^\n]", &targetAccount.id, targetAccount.cardNo,
+                targetAccount.pin, targetAccount.transferNo, targetAccount.name) == 5) {
+            if (strcmp(targetAccount.cardNo, cardNo) == 0 && strcmp(targetAccount.transferNo, transferNo) == 0) {
+                isValidAccount = true;
+                break;
+            }
+        }
+
+        fclose(accountDB);
+        if(isValidAccount == true){
+
+            // input transfer amount
+            printf("Enter the amount to transfer: ");
+            scanf("%f", &amount);
+            
+            if (amount > 0) {
+
+                // check if sufficient balance
+                if (amount <= currentAccount->balance) {
+
+                    // add transfer transaction in both account
+                    addTransaction(-amount, currentAccount->id, targetAccount.id);
+                    addTransaction(amount, targetAccount.id, currentAccount->id);
+
+                    currentAccount->balance -= amount;
+                    printf("\n\nAmount transfer successful!\n");
+
+                    delay(500);
+                    printf("\n\nPress any key to go back: ");
+                    getch();
+
+                    screen("HOME", false);
+                    home();
+                    return;
+                } else {
+                    printf("\n\nInsufficient balance!!\n");
+                }
+            } else {
+                printf("\n\nInvalid amount!!\n");
+            }
+        }else{
+            printf("\n\nInvalid target account card number or transferNo account!!\n");
+        }
+    }else{
+        printf("\n\nYou cannot transfer money to your own account!!\n");
+    }
+
+    delay(500);
+
+    // ask if the user wants to retry
+    printf("Do you want to retry (Y/N)?");
+    scanf(" %c", &retry);
+
+    if (retry == 'Y' || retry == 'y') {
+        screen("TRANSFER MONEY", false);
+        transfer();
+        return;
+    }
+
+    screen("HOME", false);
+    home();
+}
+
 void viewTransaction() {
     struct Transaction transaction;
     float total = 0;
+    char transferAccountName[11] = "-";
     FILE *transactionDB;
     i = 0;
 
@@ -209,18 +315,20 @@ void viewTransaction() {
 
     // table header
     printf("\n\n");
-    printf("| %-3s | %-10s | %-15s | %-20s |\n", "#", "Id", "Amount", "CreatedAt");
-    printf("|-----|------------|-----------------|----------------------|\n");
+    printf("| %-3s | %-10s | %-15s | %-10s | %-20s |\n", "#", "Id", "Amount", "TransferTo", "CreatedAt");
+    printf("|-----|------------|-----------------|------------|----------------------|\n");
 
     fseek(transactionDB, 0, SEEK_SET);
-    while (fscanf(transactionDB, "%d,%d,%f,%[^\n]", &transaction.id,
-            &transaction.accountId, &transaction.amount, transaction.createdAt) == 4) {
+    while (fscanf(transactionDB, "%d,%d,%d,%f,%[^\n]", &transaction.id,
+            &transaction.accountId, &transaction.transferAccountId, &transaction.amount, transaction.createdAt) == 5) {
 
         // match accountId
         if (transaction.accountId == currentAccount->id) {
+            getAccountNameById(transaction.transferAccountId, transferAccountName, sizeof(transferAccountName));
+
             // the transaction in table format
-            printf("| %-3d | %-10d | %-15.2f | %-20s |\n", (i + 1), transaction.id, transaction.amount, 
-                transaction.createdAt);
+            printf("| %-3d | %-10d | %-15.2f | %-10s | %-20s |\n", (i + 1), transaction.id, transaction.amount, 
+                transferAccountName, transaction.createdAt);
 
             total += transaction.amount;
             i++;
@@ -251,6 +359,7 @@ void account() {
     printf("Account Name: %s\n", currentAccount->name);
     printf("Account Card Number: %s\n", currentAccount->cardNo);
     printf("Account Pin Number: %s\n", currentAccount->pin);
+    printf("Account Transfer Number: %s\n", currentAccount->transferNo);
     printf("Account Balance: %.2f\n", currentAccount->balance);
 
     delay(500);
@@ -260,6 +369,8 @@ void account() {
     screen("HOME", false);
     home();
 }
+
+/* ------------------------------ ACCOUNT FUNCTIONS -------------------------*/
 
 void login() {
     FILE *accountDB;
@@ -283,8 +394,8 @@ void login() {
 
     // Read each account record and compare cardNo and pin
     fseek(accountDB, 0, SEEK_SET);
-    while (fscanf(accountDB, "%d,%[^,],%[^,],%[^\n]", &account.id, account.cardNo,
-            account.pin, account.name) == 4) {
+    while (fscanf(accountDB, "%d,%[^,],%[^,],%[^,],%[^\n]", &account.id, account.cardNo,
+            account.pin, account.transferNo, account.name) == 5) {
         if (strcmp(account.cardNo, cardNo) == 0 && strcmp(account.pin, pin) == 0) {
             
             // Set the logged-in account
@@ -336,7 +447,36 @@ void logout() {
     home();
 }
 
-void addTransaction(float amount) {
+/* ------------------------------ SYSTEM/DB OPERATION FUNCTIONS -------------------------*/
+
+void getAccountNameById(int accountId, char *accountName, size_t size) {
+    FILE *accountDB;
+    struct Account account;
+
+    // load the account.csv file to search for the account by ID
+    accountDB = fopen("account.csv", "r");
+    if (accountDB == NULL) {
+        printf("Error opening account database!\n");
+        strncpy(accountName, "-", size);  // Default to "Unknown" if there's an error
+        return;
+    }
+
+    // search for the account with the matching ID
+    while (fscanf(accountDB, "%d,%[^,],%[^,],%[^,],%[^\n]", &account.id, account.cardNo, account.pin, account.transferNo, account.name) == 5) {
+        if (account.id == accountId) {
+            strncpy(accountName, account.name, size);
+            accountName[size - 1] = '\0';  // Ensure the name is null-terminated
+            fclose(accountDB);
+            return;
+        }
+    }
+
+    // if account not found, return "Unknown"
+    strncpy(accountName, "-", size);
+    fclose(accountDB);
+}
+
+void addTransaction(float amount, int accountId, int transferAccountId) {
     struct Transaction newTransaction;
     FILE *transactionDB;
 
@@ -349,15 +489,16 @@ void addTransaction(float amount) {
 
 
     newTransaction.id = getLastTransactionId() + 1;
-    newTransaction.accountId = currentAccount->id;
+    newTransaction.accountId = accountId;
+    newTransaction.transferAccountId = transferAccountId;
     newTransaction.amount = amount;
 
     // get current date and time
     getCurrentDateTime(newTransaction.createdAt);
 
     // Write transaction to file
-    fprintf(transactionDB, "%d,%d,%.2f,%s\n", newTransaction.id, newTransaction.accountId, 
-        newTransaction.amount, newTransaction.createdAt);
+    fprintf(transactionDB, "%d,%d,%d,%.2f,%s\n", newTransaction.id, newTransaction.accountId, 
+        newTransaction.transferAccountId, newTransaction.amount, newTransaction.createdAt);
 
     fflush(transactionDB);
     fclose(transactionDB);
@@ -376,8 +517,8 @@ float getAmount() {
     }
 
     fseek(transactionDB, 0, SEEK_SET); // Reset file pointer to start
-    while (fscanf(transactionDB, "%d,%d,%f,%[^\n]", &transaction.id, &transaction.accountId, 
-            &transaction.amount, transaction.createdAt) == 4) {
+    while (fscanf(transactionDB, "%d,%d,%d,%f,%[^\n]", &transaction.id, &transaction.accountId, 
+            &transaction.transferAccountId, &transaction.amount, transaction.createdAt) == 5) {
         if (transaction.accountId == currentAccount->id) {
             total += transaction.amount;
         }
@@ -400,8 +541,8 @@ int getLastTransactionId() {
     }
 
     fseek(transactionDB, 0, SEEK_SET);
-    while (fscanf(transactionDB, "%d,%d,%f,%[^\n]", &transaction.id, &transaction.accountId, 
-            &transaction.amount, transaction.createdAt) == 4) {
+    while (fscanf(transactionDB, "%d,%d,%d,%f,%[^\n]", &transaction.id, &transaction.accountId, 
+            &transaction.transferAccountId, &transaction.amount, transaction.createdAt) == 5) {
         id = transaction.id;
     }
 
@@ -416,6 +557,8 @@ void getCurrentDateTime(char *buffer) {
     // format the date and time
     strftime(buffer, 20, "%Y-%m-%d %H:%M:%S", tm_info);
 }
+
+/* ------------------------------ UI FUNCTIONS -------------------------*/
 
 void welcomeScreen() {
     char name[20] = "WELCOME TO ATM";
